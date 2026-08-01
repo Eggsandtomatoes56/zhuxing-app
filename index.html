@@ -2583,8 +2583,8 @@ function renderDashboard() {
     });
   }
 
-  // 真实天气：Open-Meteo API（免费无Key）+ 浏览器定位/IP定位
-  renderRealWeather();
+  // 真实天气：延迟执行，不阻塞首屏渲染
+  setTimeout(() => renderRealWeather(), 0);
 
   // 连续打卡徽章
   const streakBadge = $('#streakBadge');
@@ -2606,8 +2606,8 @@ function renderDashboard() {
     streakBadge.classList.remove('show');
   }
 
-  // 本周统计
-  renderWeeklyStats();
+  // 本周统计：延迟执行，不阻塞首屏渲染
+  setTimeout(() => renderWeeklyStats(), 0);
 
   // 快捷操作
   const quickActions = [
@@ -5360,7 +5360,7 @@ function bindTaskItems(scope) {
       e.stopPropagation();
       const t = DB.tasks.find(x => x.id === id);
       t.done = !t.done; t.doneTs = t.done ? Date.now() : null;
-      DB.save(); renderAll(); toast(t.done ? '已完成' : '已恢复');
+      DB.save(); refreshLight(); toast(t.done ? '已完成' : '已恢复');
       if (t.done) { checkStreak(); celebrate('🎯', '任务完成！'); }
     });
     el.querySelector('[data-act="del"]').addEventListener('click', (e) => {
@@ -5379,12 +5379,12 @@ function bindTaskItems(scope) {
         `);
         $('#confirmDelImgTask').onclick = () => {
           DB.tasks = DB.tasks.filter(x => x.id !== id);
-          DB.save(); closeModal(); renderAll(); toast('任务已删除');
+          DB.save(); closeModal(); refreshLight(); toast('任务已删除');
         };
         return;
       }
       wrap.style.transform = 'translateX(100%)'; wrap.style.opacity = '0';
-      setTimeout(() => { DB.tasks = DB.tasks.filter(x => x.id !== id); DB.save(); renderAll(); }, 200);
+      setTimeout(() => { DB.tasks = DB.tasks.filter(x => x.id !== id); DB.save(); refreshLight(); }, 200);
       toast('已删除');
     });
 
@@ -5410,12 +5410,12 @@ function bindTaskItems(scope) {
       if (!t) return;
       if (act === 'complete' && !t.done) {
         t.done = true; t.doneTs = Date.now();
-        DB.save(); renderAll(); toast('已完成');
+        DB.save(); refreshLight(); toast('已完成');
         checkStreak(); celebrate('🎯', '任务完成！');
       } else if (act === 'delete') {
         if (t.imgId) VideoStore.deleteImg(t.imgId).catch(()=>{});
         DB.tasks = DB.tasks.filter(x => x.id !== id);
-        DB.save(); renderAll(); toast('已删除');
+        DB.save(); refreshLight(); toast('已删除');
       }
     });
   });
@@ -5551,7 +5551,7 @@ function addProjectTask(imgFile, remindAt, onDone) {
   const task = { id: uid(), pid: currentPid, text, pri: $('#pTaskPri').value, done: false, ts: Date.now(), remindAt: remindAt || null, reminded: false };
   const finish = () => {
     DB.tasks.unshift(task);
-    DB.save(); renderAll(); toast(remindAt ? '任务已添加，将按时提醒' : '任务已添加');
+    DB.save(); refreshLight(); toast(remindAt ? '任务已添加，将按时提醒' : '任务已添加');
     input.value = '';
     if (onDone) onDone();
     if (remindAt && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
@@ -5663,6 +5663,67 @@ function renderAll() {
   renderSidebar();
   if (currentView === 'dashboard') renderDashboard();
   else if (currentView === 'project') renderProject();
+}
+
+// 轻量刷新：只更新当前面板 + 侧边栏计数，不全量重建DOM
+function refreshLight() {
+  // 更新侧边栏任务计数（不全量重建）
+  $$('#projectNav .project-item').forEach(el => {
+    const pid = +el.dataset.pid;
+    const count = DB.tasks.filter(t => t.pid === pid && !t.done).length;
+    const badge = el.querySelector('.pi-count');
+    if (count > 0) {
+      if (badge) badge.textContent = count;
+      else el.insertAdjacentHTML('beforeend', `<span class="pi-count">${count}</span>`);
+    } else if (badge) badge.remove();
+  });
+  // 只刷新当前激活的面板
+  if (currentView === 'project') {
+    renderActivePanel(projectTab, DB.projects.find(x => x.id === currentPid));
+    // 更新项目头部统计
+    const tasks = DB.tasks.filter(t => t.pid === currentPid);
+    const done = tasks.filter(t => t.done).length;
+    const total = tasks.length;
+    const rate = total ? Math.round(done/total*100) : 0;
+    $$('.ph-stat-num').forEach(el => {
+      const lbl = el.nextElementSibling;
+      if (!lbl) return;
+      if (lbl.textContent === '待办') el.textContent = total - done;
+      else if (lbl.textContent === '已完成') el.textContent = done;
+      else if (lbl.textContent === '完成率') el.textContent = rate + '%';
+    });
+  } else if (currentView === 'dashboard') {
+    // 仪表盘：只更新待办数和每日任务列表
+    const todo = DB.tasks.filter(t => !t.done);
+    $('#heroSub').innerHTML = todo.length
+      ? `<span class="hero-sub-today-chip">今日</span><span class="hero-sub-num">${todo.length}</span><span class="hero-sub-tail">项任务待完成</span>`
+      : `<span class="hero-sub-done">今日全部完成，真棒</span>`;
+    // 更新每日任务列表
+    const oldDaily = $('#dailyTasksWrap');
+    if (oldDaily) {
+      const priOrder = { high: 0, mid: 1, low: 2 };
+      const allPending = DB.tasks.filter(t => !t.done).sort((a, b) => (priOrder[a.pri] || 2) - (priOrder[b.pri] || 2)).slice(0, 5);
+      const priColors = { high: 'var(--danger)', mid: 'var(--warning)', low: 'var(--success)' };
+      const priLabels = { high: '高', mid: '中', low: '低' };
+      const dailyTasksHTML = allPending.length ? allPending.map(t => {
+        const p = DB.projects.find(x => x.id === t.pid);
+        return `<div class="daily-task-item glass" style="padding:12px;margin-bottom:8px;border-radius:10px;display:flex;align-items:center;gap:10px;cursor:pointer;" data-tid="${t.id}" data-pid="${t.pid}">
+          <div style="width:10px;height:10px;border-radius:50%;background:${priColors[t.pri]||'var(--muted)'};flex-shrink:0;"></div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:14px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHTML(t.text)}</div>
+            ${p ? `<div style="font-size:12px;color:var(--muted);margin-top:2px;">${escapeHTML(p.name)} · ${priLabels[t.pri]||''}优先级</div>` : ''}
+          </div>
+        </div>`;
+      }).join('') : `<div style="text-align:center;padding:24px;color:var(--muted);font-size:13px;">🎉 暂无待办任务，享受当下</div>`;
+      const list = oldDaily.querySelector('#dailyTaskList');
+      if (list) {
+        list.innerHTML = dailyTasksHTML;
+        $$('#dailyTaskList .daily-task-item').forEach(el => {
+          el.onclick = () => openProject(+el.dataset.pid);
+        });
+      }
+    }
+  }
 }
 
 /* ===== 模态框 ===== */
@@ -6080,7 +6141,7 @@ function openTaskModal(existingTask) {
       DB.tasks.push(newTask);
       DB.save();
       closeModal();
-      renderAll();
+      refreshLight();
       toast('任务已添加');
       celebrate('✅', '任务已创建');
     }
