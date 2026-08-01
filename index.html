@@ -3998,7 +3998,11 @@ function renderProfileBar() {
           </div>
           <div>
             <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:3px;">生日</label>
-            <input type="date" id="pb-birthday" value="${escapeHTML(profile.birthday||'')}" style="width:100%;padding:7px;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--muted);" />
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input id="pb-birthday" value="${escapeHTML(profile.birthday||'')}" placeholder="2000-01-15" inputmode="numeric" style="flex:1;padding:7px;border:1px solid var(--border);border-radius:8px;font-size:12px;" />
+              <input type="date" id="pb-birthday-picker" style="width:0;height:0;opacity:0;pointer-events:none;position:absolute;" />
+              <button type="button" id="pb-birthday-btn" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);font-size:14px;cursor:pointer;" title="选择日期">📅</button>
+            </div>
           </div>
           <div>
             <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:3px;">身高cm</label>
@@ -4025,6 +4029,17 @@ function renderProfileBar() {
     const open = editEl.style.display === 'none';
     editEl.style.display = open ? 'block' : 'none';
     chevron.style.transform = open ? 'rotate(180deg)' : '';
+  });
+  // 生日选择按钮
+  bar.querySelector('#pb-birthday-btn').addEventListener('click', () => {
+    const picker = bar.querySelector('#pb-birthday-picker');
+    const input = bar.querySelector('#pb-birthday');
+    if (input.value) picker.value = input.value;
+    picker.showPicker ? picker.showPicker() : picker.click();
+  });
+  // 日期选择同步到输入框
+  bar.querySelector('#pb-birthday-picker').addEventListener('change', (e) => {
+    bar.querySelector('#pb-birthday').value = e.target.value;
   });
   // 保存
   bar.querySelector('#pb-save').addEventListener('click', () => {
