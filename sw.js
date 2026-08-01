@@ -1,5 +1,5 @@
 // 工作台 Service Worker - 离线缓存
-const CACHE = 'zhuxing-v20';
+const CACHE = 'zhuxing-v22';
 const ASSETS = [
   './',
   './index.html',

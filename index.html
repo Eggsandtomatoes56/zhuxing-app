@@ -1352,9 +1352,9 @@ ensureProject('wb_init_workskills',
   }] }
 );
 ensureProject('wb_init_worksummary',
-  { id: Date.now() + 300, name: '工作总结', module: '工作', color: '#3D7A8C', desc: '每周/月工作复盘与成果沉淀', ts: Date.now() + 300, tabs: ['records','tasks','notes','stats'], defaultTab: 'records' },
+  { id: Date.now() + 300, name: '复盘总结', module: '复盘', color: '#3D7A8C', desc: '每周/月工作复盘与成果沉淀', ts: Date.now() + 300, tabs: ['records','tasks','notes','stats'], defaultTab: 'records' },
   { genericRecords: [{
-    id: Date.now() + 301, date: todayStr(), title: '第31周工作总结',
+    id: Date.now() + 301, date: todayStr(), title: '第31周复盘总结',
     content: '本周完成：\n1. 上线XX项目 2.0 版本\n2. 完成3场面试招聘\n3. 优化报告导出速度提升40%\n不足：\n- 需求评审文档不够详细\n- 跨部门沟通需要提前对齐\n下周计划：\n- 完成技术分享文档\n- 推进需求评审机制优化',
     tags: ['周报','复盘'], pages: '2', duration: '30', ts: Date.now() + 301
   }] }
@@ -1382,6 +1382,15 @@ ensureProject('wb_init_news',
 DB.save = _origDBSave;
 if (_wbInitDirty) _origDBSave();
 
+// 一次性迁移：老用户"工作总结"改名为"复盘总结"并独立为"复盘"模块
+{
+  let migrated = false;
+  DB.projects.forEach(p => {
+    if (p.name === '工作总结') { p.name = '复盘总结'; p.module = '复盘'; migrated = true; }
+  });
+  if (migrated) _origDBSave();
+}
+
 let currentView = 'dashboard'; // dashboard | project
 let currentPid = null;
 let projectTab = 'records'; // 默认打开记录
@@ -1394,7 +1403,7 @@ let collapsedModules = JSON.parse(localStorage.getItem('wb_collapsed_modules') |
 const TAB_INFO = {
   records: { label: '记录', icon: '' },
   tasks:   { label: '任务', icon: '' },
-  notes:   { label: '笔记', icon: '' },
+  notes:   { label: '心得', icon: '' },
   recipes: { label: '菜品', icon: '' },
   timer:   { label: '计时器', icon: '' },
   stats:   { label: '统计', icon: '' }
@@ -1409,7 +1418,7 @@ function getProjectTabs(p) {
     '生活': ['records','recipes','tasks','stats'],
     '学习': ['records','tasks','notes','timer','stats'],
     '旅行': ['records','tasks','notes','stats'],
-    '娱乐': ['records','tasks','notes','stats'],
+    '娱乐': ['records','tasks','stats'],
     '好物': ['records','tasks','notes','stats'],
     '阅读': ['records','tasks','notes','stats'],
     '工作': ['records','tasks','notes','stats'],
@@ -1432,6 +1441,9 @@ function getTabLabel(p, tabKey) {
   if (p?.tabLabels && typeof p.tabLabels === 'object' && p.tabLabels[tabKey]) {
     return p.tabLabels[tabKey];
   }
+  // 模块专属标签名
+  if (p && (p.module === '娱乐' || p.recordType === 'movie') && tabKey === 'tasks') return '观影计划';
+  if (p && (p.module === '旅行' || p.recordType === 'travel') && tabKey === 'notes') return '游记';
   if (TAB_INFO[tabKey]) return TAB_INFO[tabKey].label;
   if (tabKey.startsWith('custom_')) return tabKey.replace('custom_', '');
   return tabKey;
@@ -1446,7 +1458,7 @@ if (!localStorage.getItem('wb_init_tabs')) {
         '生活': ['records','recipes','tasks','stats'],
         '学习': ['records','tasks','notes','timer','stats'],
         '旅行': ['records','tasks','notes','stats'],
-        '娱乐': ['records','tasks','notes','stats'],
+        '娱乐': ['records','tasks','stats'],
         '好物': ['records','tasks','notes','stats'],
         '阅读': ['records','tasks','notes','stats'],
         '工作': ['records','tasks','notes','stats'],
@@ -1502,12 +1514,33 @@ function toast(msg) {
 }
 
 /* ===== 侧边栏渲染 ===== */
+/* 倒计时辅助 */
+function countdownDays(targetDate) {
+  if (!targetDate) return null;
+  const target = new Date(targetDate); target.setHours(0,0,0,0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  return Math.ceil((target - today) / 86400000);
+}
+function countdownBadgeHTML(targetDate) {
+  const days = countdownDays(targetDate);
+  if (days === null) return '';
+  const color = days < 0 ? 'var(--muted)' : days <= 7 ? 'var(--danger)' : days <= 30 ? 'var(--warning)' : 'var(--accent)';
+  const text = days > 0 ? `还有${days}天` : days === 0 ? '今天' : `已过${-days}天`;
+  return `<span style="font-size:10px;color:${color};padding:1px 6px;background:${color}1a;border-radius:8px;font-weight:600;flex-shrink:0;white-space:nowrap;">📅 ${text}</span>`;
+}
+
 function renderSidebar() {
   // 按模块分组
   const groups = {};
   DB.projects.forEach(p => { (groups[p.module] = groups[p.module] || []).push(p); });
+  // 模块显示顺序：复盘总结排第一，其余按原序追加
+  const MODULE_ORDER = ['复盘','学习','健康','阅读','生活','旅行','娱乐','好物','工作','其他'];
+  const orderedMods = Object.keys(groups).sort((a, b) => {
+    const ia = MODULE_ORDER.indexOf(a), ib = MODULE_ORDER.indexOf(b);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+  });
   let html = '';
-  Object.keys(groups).forEach(mod => {
+  orderedMods.forEach(mod => {
     const isCol = !!collapsedModules[mod];
     const projCount = groups[mod].length;
     html += `<div class="module-group ${isCol?'collapsed':''}" data-module="${escapeHTML(mod)}">
@@ -1523,6 +1556,7 @@ function renderSidebar() {
       html += `<button class="project-item ${currentPid === p.id ? 'active' : ''}" data-pid="${p.id}">
         <span class="pi-dot" style="background:${p.color}"></span>
         <span class="pi-name">${escapeHTML(p.name)}</span>
+        ${p.targetDate ? countdownBadgeHTML(p.targetDate) : ''}
         ${count > 0 ? `<span class="pi-count">${count}</span>` : ''}
       </button>`;
     });
@@ -1654,11 +1688,30 @@ function renderWeeklyStats() {
   const sunDate = new Date(monday); sunDate.setDate(monday.getDate() + 6);
   const range = `${monday.getMonth()+1}/${monday.getDate()} - ${sunDate.getMonth()+1}/${sunDate.getDate()}`;
 
-  // 金色星星徽章：今日高优任务完成>=2 或 今日完成>=4
-  const todayTasks = DB.tasks.filter(t => t.done && t.ts >= today.getTime() && t.ts < today.getTime() + 86400000);
-  const todayHighDone = todayTasks.filter(t => normPri(t.pri) === 'high').length;
-  const todayTotalDone = todayTasks.length;
-  const showStar = todayHighDone >= 2 || todayTotalDone >= 4;
+  // 综合达成率：学习占比60% + 健身占比40%，每日达成率≥85%为达标
+  const learnPids = new Set(DB.projects.filter(p => p.module === '学习' || p.module === '复盘').map(p => p.id));
+  const healthPids = new Set(DB.projects.filter(p => p.module === '健康').map(p => p.id));
+  const dailyRates = weekDays.map(wd => {
+    const dayTs0 = wd.ts, dayTs1 = wd.ts + 86400000;
+    // 学习达成率 = 当天学习任务完成率
+    const learnTasks = DB.tasks.filter(t => learnPids.has(t.pid) && t.ts >= dayTs0 && t.ts < dayTs1);
+    const learnDone = learnTasks.filter(t => t.done).length;
+    const learnRate = learnTasks.length > 0 ? learnDone / learnTasks.length : 0;
+    // 健身达成率 = 当天有训练记录视为100%
+    const hasTrain = DB.records.some(r => healthPids.has(r.pid) && r.date === wd.date && r.training && r.training.length > 0);
+    const healthRate = hasTrain ? 1 : 0;
+    // 综合 = 学习*60% + 健身*40%（无学习任务时只看健身，无健身时只看学习）
+    let rate = 0;
+    if (learnTasks.length > 0 && hasTrain) rate = learnRate * 0.6 + healthRate * 0.4;
+    else if (learnTasks.length > 0) rate = learnRate;
+    else if (hasTrain) rate = healthRate;
+    return { ...wd, rate: Math.round(rate * 100), achieved: rate >= 0.85 };
+  });
+  const weekAchievedDays = dailyRates.filter(d => d.achieved).length;
+
+  // 金色星星徽章：今日综合达成率≥85%
+  const todayRate = dailyRates.find(d => d.isToday);
+  const showStar = todayRate && todayRate.achieved;
 
   // 本周完成天数（有任务完成的日子）
   const weekDoneDates = new Set();
@@ -1670,23 +1723,23 @@ function renderWeeklyStats() {
       <div class="weekly-title">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
         本周统计
-        ${showStar ? `<span style="display:inline-flex;align-items:center;gap:2px;margin-left:6px;font-size:14px;color:#F5A623;" title="今日表现优秀！">⭐</span>` : ''}
+        ${showStar ? `<span style="display:inline-flex;align-items:center;gap:2px;margin-left:6px;font-size:14px;color:#F5A623;" title="今日达成率≥85%！">⭐</span>` : ''}
       </div>
       <div class="weekly-range">${range}</div>
     </div>
     <div class="weekly-stats">
+      <div class="weekly-stat"><div class="weekly-stat-num" style="color:var(--success);">${weekAchievedDays}/7</div><div class="weekly-stat-lbl">达标天数</div></div>
       <div class="weekly-stat"><div class="weekly-stat-num" style="color:var(--purple);">${activeDays}</div><div class="weekly-stat-lbl">活动天数</div></div>
-      <div class="weekly-stat"><div class="weekly-stat-num" style="color:var(--success);">${weekDone}</div><div class="weekly-stat-lbl">完成任务</div></div>
-      <div class="weekly-stat"><div class="weekly-stat-num" style="color:var(--warning);">${weekNotesCount}</div><div class="weekly-stat-lbl">新增笔记</div></div>
+      <div class="weekly-stat"><div class="weekly-stat-num" style="color:var(--warning);">${weekDone}</div><div class="weekly-stat-lbl">完成任务</div></div>
     </div>
     <div class="weekly-chart">
-      ${activity.map((a, idx) => `
+      ${dailyRates.map((d, idx) => `
         <div class="weekly-bar-col">
-          <div class="weekly-bar ${a.isToday?'weekly-bar-today':''}" style="height:${Math.max(6, a.count/maxAct*100)}%; background:${a.count>0?'linear-gradient(180deg, var(--accent), var(--accent-ink))':'rgba(128,120,116,0.15)'};" title="${a.count}项活动"></div>
-          <div class="weekly-bar-lbl ${a.isToday?'today':''}">${a.isToday?'今':'周'+dayNames[idx]}</div>
+          <div class="weekly-bar ${d.isToday?'weekly-bar-today':''}" style="height:${Math.max(6, d.rate)}%; background:${d.rate>0?(d.achieved?'linear-gradient(180deg, var(--success), #5BA85B)':'linear-gradient(180deg, var(--accent), var(--accent-ink))'):'rgba(128,120,116,0.15)'};" title="达成率 ${d.rate}%"></div>
+          <div class="weekly-bar-lbl ${d.isToday?'today':''}">${d.isToday?'今':'周'+dayNames[idx]}</div>
         </div>`).join('')}
     </div>
-    <div class="weekly-legend">本周每日活动量（记录 + 任务 + 笔记）${showStar ? ' · 今日⭐' : ''}</div>
+    <div class="weekly-legend">综合达成率（学习60% + 健身40%，≥85%达标）${showStar ? ' · 今日⭐' : ''}</div>
   `;
 }
 
@@ -2557,7 +2610,7 @@ function renderProject() {
   $('#projectContent').innerHTML = `
     <div class="proj-header" style="--ph-color:${p.color}">
       <div class="proj-header-top">
-        <div class="proj-header-name"><span class="proj-header-dot" style="background:${p.color}"></span>${escapeHTML(p.name)}</div>
+        <div class="proj-header-name"><span class="proj-header-dot" style="background:${p.color}"></span>${escapeHTML(p.name)} ${p.targetDate ? countdownBadgeHTML(p.targetDate) : ''}</div>
         <div style="display:flex;gap:8px;align-items:center;">
           <span class="proj-header-module">${escapeHTML(p.module)}</span>
           <button class="icon-btn" id="projMenuBtn" title="项目菜单" style="width:30px;height:30px;border-radius:8px;">
@@ -2682,6 +2735,7 @@ function openEditProjectModal(p) {
     <div class="field"><label class="field-label">项目名称</label><input class="field-input" id="ePName" value="${escapeHTML(p.name)}" maxlength="20" /></div>
     <div class="field"><label class="field-label">模块名称（可自定义）</label><input class="field-input" id="ePModule" value="${escapeHTML(p.module)}" placeholder="如：学习 / 旅行 / 自定义" maxlength="10" /></div>
     <div class="field"><label class="field-label">描述（可选）</label><input class="field-input" id="ePDesc" value="${escapeHTML(p.desc || '')}" placeholder="项目简介" maxlength="40" /></div>
+    <div class="field"><label class="field-label">目标日期 / 倒计时（可选）</label><input type="date" class="field-input" id="ePTargetDate" value="${escapeHTML(p.targetDate || '')}" /><div style="font-size:11px;color:var(--muted);margin-top:4px;">设置后项目名旁会显示倒计时（如考研倒计时）</div></div>
     <div class="field"><label class="field-label">主题色</label><div class="color-pick" id="ePColor">
       ${COLORS.map((c,i) => `<button class="color-opt ${c===color?'sel':''}" data-c="${c}" style="background:${c}"></button>`).join('')}
     </div></div>
@@ -2784,7 +2838,7 @@ function openEditProjectModal(p) {
     });
     if (!name) { toast('请输入项目名称'); return; }
     if (!tabs.length) { toast('至少选择一个功能标签'); return; }
-    p.name = name; p.module = module; p.desc = desc; p.color = color; p.tabs = tabs; p.defaultTab = defaultTab; p.tabLabels = tabLabels;
+    p.name = name; p.module = module; p.desc = desc; p.color = color; p.tabs = tabs; p.defaultTab = defaultTab; p.tabLabels = tabLabels; p.targetDate = $('#ePTargetDate').value || '';
     DB.save(); closeModal(); renderAll(); toast('项目已更新');
   });
 }
@@ -2849,6 +2903,7 @@ let timerState = {
   remaining: TIMER_MODES.focus.duration,
   running: false,
   intervalId: null,
+  endTs: 0,
   completedCount: 0,
   totalSeconds: 0
 };
@@ -2998,8 +3053,11 @@ function renderTimer() {
 
 function startTimer() {
   timerState.running = true;
-  timerState.intervalId = setInterval(() => {
-    timerState.remaining--;
+  // 基于绝对时间戳计算，避免后台 setInterval 被节流导致变慢
+  timerState.endTs = Date.now() + timerState.remaining * 1000;
+  const tick = () => {
+    // 用 endTs 校正 remaining，而非累减
+    timerState.remaining = Math.max(0, Math.round((timerState.endTs - Date.now()) / 1000));
     if (timerState.remaining <= 0) {
       // 完成
       clearInterval(timerState.intervalId);
@@ -3012,11 +3070,12 @@ function startTimer() {
       if (timerState.mode === 'focus') {
         celebrate('🎯', `${modeName}完成！`);
         if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
-        // 自动切到短休
+        sendSystemNotification('🎯 ' + modeName + '完成！', '专注结束，该休息一下了');
         timerState.mode = timerState.completedCount % 4 === 0 ? 'long' : 'short';
       } else {
         celebrate('☕', '休息结束，继续加油！');
         if (navigator.vibrate) navigator.vibrate(100);
+        sendSystemNotification('☕ 休息结束', '继续加油，开始下一段专注吧');
         timerState.mode = 'focus';
       }
       timerState.remaining = TIMER_MODES[timerState.mode].duration;
@@ -3036,15 +3095,63 @@ function startTimer() {
         progEl.setAttribute('stroke-dashoffset', circumference * (1 - progress));
       }
     }
-  }, 1000);
+  };
+  timerState.intervalId = setInterval(tick, 1000);
   renderTimer();
 }
 
 function pauseTimer() {
   clearInterval(timerState.intervalId);
   timerState.running = false;
+  timerState.endTs = 0;
   renderTimer();
 }
+
+// 页面切回前台时校正计时器（解决后台 setInterval 被节流的问题）
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && timerState.running && timerState.endTs) {
+    // 触发一次 tick 校正，若已超时则自动完成
+    const correct = Math.max(0, Math.round((timerState.endTs - Date.now()) / 1000));
+    timerState.remaining = correct;
+    if (correct <= 0 && timerState.intervalId) {
+      clearInterval(timerState.intervalId);
+      timerState.intervalId = setInterval(() => {}, 99999); // 占位，让上方 tick 逻辑接管
+      // 直接触发完成
+      const evt = new Event('timerComplete');
+      // 简化：直接调用一次 tick 逻辑
+      timerState.running = true;
+      const tickFn = () => {
+        timerState.remaining = 0;
+        clearInterval(timerState.intervalId);
+        timerState.running = false;
+        timerState.completedCount++;
+        timerState.totalSeconds += TIMER_MODES[timerState.mode].duration;
+        saveTimerStats();
+        const modeName = TIMER_MODES[timerState.mode].name;
+        if (timerState.mode === 'focus') {
+          celebrate('🎯', `${modeName}完成！`);
+          if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+          sendSystemNotification('🎯 ' + modeName + '完成！', '专注结束，该休息一下了');
+          timerState.mode = timerState.completedCount % 4 === 0 ? 'long' : 'short';
+        } else {
+          celebrate('☕', '休息结束，继续加油！');
+          if (navigator.vibrate) navigator.vibrate(100);
+          sendSystemNotification('☕ 休息结束', '继续加油，开始下一段专注吧');
+          timerState.mode = 'focus';
+        }
+        timerState.remaining = TIMER_MODES[timerState.mode].duration;
+        timerState.endTs = 0;
+        renderTimer();
+        toast(`${modeName}时间到！`);
+      };
+      tickFn();
+    } else {
+      // 仅更新显示
+      const timeEl = document.querySelector('.timer-time');
+      if (timeEl) timeEl.textContent = fmtTimerTime(timerState.remaining);
+    }
+  }
+});
 
 /* ===== 菜谱（生活项目） ===== */
 
@@ -4196,11 +4303,12 @@ function renderGenericList(records) {
     return;
   }
   wrap.innerHTML = records.map(r => `
-    <div class="history-card glass" style="margin-bottom:12px;" data-id="${r.id}">
+    <div class="history-card glass" style="margin-bottom:12px;${r.done?'border-left:3px solid var(--success);':''}" data-id="${r.id}">
       <div class="history-head">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <span style="font-size:20px;">📝</span>
+          <span style="font-size:20px;cursor:pointer;" data-act="toggle" title="点击切换完成状态">${r.done ? '✅' : '📝'}</span>
           <div class="history-date">${r.date || ''} ${r.date === todayStr() ? '<span class="history-date-today">今天</span>' : ''}</div>
+          ${r.done ? '<span style="font-size:11px;color:var(--success);font-weight:600;">已完成</span>' : ''}
         </div>
         <div style="display:flex;gap:8px;">
           <button class="history-del" data-act="edit">编辑</button>
@@ -4208,7 +4316,8 @@ function renderGenericList(records) {
         </div>
       </div>
       <div style="font-weight:700;font-size:16px;margin:6px 0 4px;">${escapeHTML(r.title || '无标题')}</div>
-      <div style="color:var(--ink-2);font-size:14px;line-height:1.6;white-space:pre-wrap;">${escapeHTML(r.content || '')}</div>
+      ${r.content ? `<div style="color:var(--ink-2);font-size:14px;line-height:1.6;white-space:pre-wrap;">${escapeHTML(r.content)}</div>` : ''}
+      ${r.image ? `<img src="${r.image}" style="max-width:100%;max-height:240px;border-radius:8px;margin-top:8px;display:block;" />` : ''}
       ${r.tags && r.tags.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">${r.tags.map(t => `<span class="recipe-tag">${escapeHTML(t)}</span>`).join('')}</div>` : ''}
       ${r.pages || r.duration ? `<div style="font-size:12px;color:var(--muted);margin-top:6px;">${r.pages ? `📄 ${escapeHTML(r.pages)}页` : ''} ${r.duration ? `⏱ ${escapeHTML(r.duration)}分钟` : ''}</div>` : ''}
     </div>
@@ -4219,29 +4328,59 @@ function renderGenericList(records) {
     el.style.cursor = 'pointer';
     el.querySelector('[data-act="edit"]').addEventListener('click', (e) => { e.stopPropagation(); openGenericRecordEditor(rec); });
     el.querySelector('[data-act="del"]').addEventListener('click', (e) => { e.stopPropagation(); DB.genericRecords = DB.genericRecords.filter(x => x.id !== id); DB.save(); renderAll(); toast('记录已删除'); });
-    // 整个卡片点击即可编辑（点击删除按钮除外）
+    el.querySelector('[data-act="toggle"]').addEventListener('click', (e) => { e.stopPropagation(); rec.done = !rec.done; DB.save(); renderAll(); toast(rec.done?'已标记完成':'已取消完成'); });
+    // 整个卡片点击即可编辑（点击按钮和勾选除外）
     el.addEventListener('click', (e) => {
-      if (e.target.closest('[data-act="del"]') || e.target.closest('[data-act="edit"]')) return;
+      if (e.target.closest('[data-act="del"]') || e.target.closest('[data-act="edit"]') || e.target.closest('[data-act="toggle"]')) return;
       openGenericRecordEditor(rec);
     });
   });
 }
 
 function openGenericRecordEditor(existing) {
-  const e = existing || { date: todayStr(), title: '', content: '', tags: [], pages: '', duration: '' };
+  const e = existing || { date: todayStr(), title: '', content: '', tags: [], pages: '', duration: '', done: false, image: '' };
   const tagsStr = Array.isArray(e.tags) ? e.tags.join(', ') : (e.tags || '');
+  let currentImg = e.image || '';
   openModal(`
     <div class="modal-title">${existing ? '编辑记录' : '添加记录'}</div>
     <div class="field"><label class="field-label">日期</label><input type="date" class="field-input" id="g-date" value="${escapeHTML(e.date || todayStr())}" /></div>
     <div class="field"><label class="field-label">标题</label><input class="field-input" id="g-title" placeholder="如：《活着》第3章 / 前端技术文章" value="${escapeHTML(e.title || '')}" /></div>
-    <div class="field"><label class="field-label">内容 / 心得</label><textarea class="field-input" id="g-content" rows="5" placeholder="记录今天读的内容和感想...">${escapeHTML(e.content || '')}</textarea></div>
+    <div class="field"><label class="field-label">内容</label><textarea class="field-input" id="g-content" rows="5" placeholder="记录今天读的内容...">${escapeHTML(e.content || '')}</textarea></div>
+    <div class="field"><label class="field-label">照片（可选）</label>
+      <input type="file" accept="image/*" id="g-img-input" style="display:none;" />
+      <div id="g-img-wrap" style="position:relative;border:1px dashed var(--border);border-radius:8px;text-align:center;cursor:pointer;overflow:hidden;">
+        ${currentImg ? `<img src="${currentImg}" style="max-width:100%;max-height:160px;border-radius:8px;display:block;margin:0 auto;" /><button type="button" id="g-img-del" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:14px;line-height:1;">×</button>` : `<div style="color:var(--muted);font-size:13px;padding:20px 0;">📷 点击上传照片（可选）</div>`}
+      </div>
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
       <div class="field"><label class="field-label">页数 / 进度</label><input class="field-input" id="g-pages" placeholder="如：15-28" value="${escapeHTML(e.pages || '')}" /></div>
       <div class="field"><label class="field-label">时长（分钟）</label><input class="field-input" id="g-duration" placeholder="如：40" inputmode="numeric" value="${escapeHTML(e.duration || '')}" /></div>
     </div>
     <div class="field"><label class="field-label">标签（用逗号分隔）</label><input class="field-input" id="g-tags" placeholder="如：文学, 成长, 技术" value="${escapeHTML(tagsStr)}" /></div>
+    <div class="field" style="display:flex;align-items:center;gap:8px;">
+      <input type="checkbox" id="g-done" ${e.done?'checked':''} style="width:18px;height:18px;cursor:pointer;" />
+      <label for="g-done" style="font-size:14px;cursor:pointer;">标记为已完成</label>
+    </div>
     <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">取消</button><button class="btn btn-primary" id="gSave">保存</button></div>
   `);
+  // 图片上传处理
+  const imgWrap = $('#g-img-wrap');
+  const imgInput = $('#g-img-input');
+  function refreshImgWrap() {
+    imgWrap.innerHTML = currentImg ? `<img src="${currentImg}" style="max-width:100%;max-height:160px;border-radius:8px;display:block;margin:0 auto;" /><button type="button" id="g-img-del" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:14px;line-height:1;">×</button>` : `<div style="color:var(--muted);font-size:13px;padding:20px 0;">📷 点击上传照片（可选）</div>`;
+  }
+  imgWrap.addEventListener('click', (ev) => {
+    if (ev.target.id === 'g-img-del') { currentImg = ''; refreshImgWrap(); return; }
+    if (ev.target.tagName !== 'BUTTON') imgInput.click();
+  });
+  imgInput.addEventListener('change', (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { toast('图片不能超过5MB'); return; }
+    const reader = new FileReader();
+    reader.onload = (ev) => { currentImg = ev.target.result; refreshImgWrap(); };
+    reader.readAsDataURL(file);
+  });
   $('#gSave').addEventListener('click', () => {
     const date = $('#g-date').value.trim();
     const title = $('#g-title').value.trim();
@@ -4249,11 +4388,12 @@ function openGenericRecordEditor(existing) {
     const pages = $('#g-pages').value.trim();
     const duration = $('#g-duration').value.trim();
     const tags = $('#g-tags').value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
-    if (!title && !content) { toast('请至少填写标题或内容'); return; }
+    const done = $('#g-done').checked;
+    if (!title && !content && !currentImg) { toast('请至少填写标题、内容或上传照片'); return; }
     if (existing) {
-      existing.date = date; existing.title = title; existing.content = content; existing.pages = pages; existing.duration = duration; existing.tags = tags; existing.ts = Date.now();
+      existing.date = date; existing.title = title; existing.content = content; existing.pages = pages; existing.duration = duration; existing.tags = tags; existing.done = done; existing.image = currentImg; existing.ts = Date.now();
     } else {
-      DB.genericRecords.push({ id: uid(), pid: currentPid, date, title, content, pages, duration, tags, ts: Date.now() });
+      DB.genericRecords.push({ id: uid(), pid: currentPid, date, title, content, pages, duration, tags, done, image: currentImg, ts: Date.now() });
     }
     DB.save(); closeModal(); renderAll(); toast('记录已保存');
   });
@@ -4263,36 +4403,10 @@ function openGenericRecordEditor(existing) {
 function renderNewsRecords() {
   const panel = $('#panel-records');
   if (!panel) return;
-  // 新闻记录共用 genericRecords，但加上来源/分类/重要程度字段
+  // 新闻记录共用 genericRecords
   const records = DB.genericRecords.filter(r => r.pid === currentPid).slice().sort((a,b) => (b.date || '').localeCompare(a.date || ''));
 
   panel.innerHTML = `
-    <!-- 热点资讯（自动抓取） -->
-    <div class="glass" style="margin-bottom:14px;padding:14px;border-radius:var(--radius);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <div style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:15px;">
-          <span style="font-size:18px;">📰</span> 热点资讯
-          <span style="font-size:11px;color:var(--muted);font-weight:400;">主流源自动聚合</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <select id="newsSrcSel" style="font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface-1);color:var(--ink-1);">
-            <option value="all">📰 全部</option>
-            <option value="时政">🏛️ 时政</option>
-            <option value="国际">🌍 国际</option>
-            <option value="财经">💰 财经</option>
-            <option value="科技">💻 科技</option>
-            <option value="社会">👥 社会</option>
-            <option value="视频">🎬 视频</option>
-            <option value="体育">⚽ 体育</option>
-            <option value="综合">📚 综合</option>
-          </select>
-          <button id="refreshNewsBtn" style="font-size:12px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface-1);color:var(--ink-2);cursor:pointer;">刷新</button>
-        </div>
-      </div>
-      <div id="hotNewsBox" style="min-height:60px;">
-        <div style="text-align:center;padding:16px;color:var(--muted);font-size:13px;">点击「刷新」获取最新资讯</div>
-      </div>
-    </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <button class="btn btn-primary" id="addNewsBtn" style="padding:10px 20px;">
         <svg style="display:inline-block;width:16px;height:16px;vertical-align:-2px;margin-right:4px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>记录一条资讯
@@ -4302,175 +4416,7 @@ function renderNewsRecords() {
     <div id="newsList"></div>
   `;
   $('#addNewsBtn').addEventListener('click', () => openNewsEditor());
-  $('#refreshNewsBtn').addEventListener('click', () => { window._hotNewsForce = true; fetchHotNews($('#newsSrcSel').value); });
-  $('#newsSrcSel').addEventListener('change', () => fetchHotNews($('#newsSrcSel').value));
   renderNewsList(records);
-  // 自动加载一次热点
-  fetchHotNews('all');
-}
-
-/* ===== 热点资讯抓取（RSS via CORS代理） ===== */
-const NEWS_SOURCES = [
-  // 权威媒体
-  { name: '中新网', url: 'http://www.chinanews.com.cn/rss/scroll-news.xml', category: '时政', official: true },
-  { name: '人民网', url: 'https://feedx.net/rss/people.xml', category: '时政', official: true },
-  { name: '新华网', url: 'https://feedx.net/rss/xinhuanet.xml', category: '时政', official: true },
-  { name: '央视新闻', url: 'https://feedx.net/rss/cctv.xml', category: '时政', official: true },
-  { name: '澎湃新闻', url: 'https://feedx.net/rss/thepaper.xml', category: '社会', official: true },
-  { name: '环球网', url: 'https://feedx.net/rss/huanqiu.xml', category: '国际', official: true },
-  // 科技
-  { name: '36氪', url: 'https://36kr.com/feed', category: '科技' },
-  { name: 'IT之家', url: 'https://www.ithome.com/rss/', category: '科技' },
-  { name: '少数派', url: 'https://sspai.com/feed', category: '科技' },
-  // 短视频/社交热榜（via RSSHub 公共实例）
-  { name: '抖音热榜', url: 'https://rsshub.app/douyin/trending', category: '视频', isVideo: true },
-  { name: 'B站热门', url: 'https://rsshub.app/bilibili/ranking/0/3/1', category: '视频', isVideo: true },
-  { name: '微博热搜', url: 'https://rsshub.app/weibo/search/hot', category: '社会' },
-  { name: '知乎热榜', url: 'https://rsshub.app/zhihu/hot', category: '综合' },
-  { name: '知乎日报', url: 'https://news-at.zhihu.com/api/4/news/latest', category: '综合', isJSON: true, fixLink: 'zhihu' },
-  // 财经
-  { name: '华尔街见闻', url: 'https://feedx.net/rss/wallstreetcn.xml', category: '财经' },
-  { name: '第一财经', url: 'https://feedx.net/rss/yicai.xml', category: '财经' },
-  // 体育/娱乐
-  { name: '虎扑体育', url: 'https://feedx.net/rss/hupu.xml', category: '体育' },
-];
-
-async function fetchHotNews(filter) {
-  const box = $('#hotNewsBox');
-  if (!box) return;
-  // 5分钟内使用缓存（手动刷新按钮强制更新）
-  if (window._hotNewsCache && window._hotNewsCacheTime && (Date.now() - window._hotNewsCacheTime < 5 * 60 * 1000) && !window._hotNewsForce) {
-    renderHotNews(window._hotNewsCache, filter);
-    return;
-  }
-  window._hotNewsForce = false;
-  box.innerHTML = `<div style="text-align:center;padding:20px;color:var(--muted);font-size:13px;"><span class="spin" style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px;"></span>正在获取最新资讯...</div>`;
-  const proxyList = [
-    (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-    (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
-    (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`,
-  ];
-  let allNews = [];
-  let okCount = 0;
-  // 分批抓取（每批 4 个源并行，避免代理限流）
-  const batchSize = 4;
-  const results = [];
-  for (let bi = 0; bi < NEWS_SOURCES.length; bi += batchSize) {
-    const batch = NEWS_SOURCES.slice(bi, bi + batchSize);
-    const batchResults = await Promise.allSettled(batch.map(async (src) => {
-      for (const mk of proxyList) {
-        try {
-          const ctrl = new AbortController();
-          const t = setTimeout(() => ctrl.abort(), 8000);
-          const resp = await fetch(mk(src.url), { signal: ctrl.signal });
-          clearTimeout(t);
-          if (!resp.ok) continue;
-          if (src.isJSON) {
-            const data = await resp.json();
-            return (data.stories || []).slice(0, 8).map(s => ({
-              title: s.title,
-              link: src.fixLink === 'zhihu'
-                ? (s.url || (s.id ? `https://daily.zhihu.com/story/${s.id}` : ''))
-                : (s.url || ''),
-              source: src.name,
-              category: src.category, pubDate: '', desc: '',
-              isVideo: !!src.isVideo
-            }));
-          }
-          const text = await resp.text();
-          return parseRSS(text, src);
-        } catch (e) { /* 试下一个代理 */ }
-      }
-      return [];
-    }));
-    results.push(...batchResults);
-  }
-  results.forEach(r => {
-    if (r.status === 'fulfilled' && r.value.length) { allNews = allNews.concat(r.value); okCount++; }
-  });
-  // 缓存到内存
-  window._hotNewsCache = allNews;
-  window._hotNewsCacheTime = Date.now();
-  renderHotNews(allNews, filter);
-  if (allNews.length === 0) {
-    box.innerHTML = `<div style="text-align:center;padding:16px;color:var(--muted);font-size:13px;">暂无法获取资讯（网络或代理受限），可手动添加<br><button id="hotNewsRetry" style="margin-top:8px;font-size:12px;color:var(--accent);background:none;border:none;cursor:pointer;">重试</button></div>`;
-    $('#hotNewsRetry').addEventListener('click', () => { window._hotNewsForce = true; fetchHotNews('all'); });
-  } else {
-    toast(`已获取 ${allNews.length} 条资讯（${okCount}/${NEWS_SOURCES.length} 源）`);
-  }
-}
-
-function parseRSS(xmlText, src) {
-  try {
-    const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
-    const items = [...doc.querySelectorAll('item, entry')].slice(0, 8);
-    return items.map(it => {
-      const get = (tag) => { const el = it.querySelector(tag); return el ? el.textContent.trim() : ''; };
-      const title = get('title');
-      const link = get('link') || (it.querySelector('link') && it.querySelector('link').getAttribute('href')) || '';
-      const pubDate = get('pubDate') || get('published') || get('updated') || '';
-      let desc = get('description') || get('summary') || get('content') || '';
-      desc = desc.replace(/<[^>]+>/g, '').slice(0, 120);
-      return { title, link, source: src.name, category: src.category, pubDate, desc, isVideo: !!src.isVideo, official: !!src.official };
-    }).filter(n => n.title);
-  } catch (e) { return []; }
-}
-
-function renderHotNews(news, filter) {
-  const box = $('#hotNewsBox');
-  if (!box) return;
-  let list = news;
-  if (filter && filter !== 'all') list = news.filter(n => n.category === filter);
-  if (list.length === 0) {
-    box.innerHTML = `<div style="text-align:center;padding:16px;color:var(--muted);font-size:13px;">该分类暂无资讯</div>`;
-    return;
-  }
-  box.innerHTML = list.slice(0, 30).map((n, i) => {
-    const videoTag = n.isVideo ? `<span style="background:#ffe0ec;color:#c0392b;padding:1px 6px;border-radius:4px;font-size:10px;">▶ 视频</span>` : '';
-    const offTag = n.official ? `<span style="background:#e3f2fd;color:#1565c0;padding:1px 6px;border-radius:4px;font-size:10px;">✓ 官方</span>` : '';
-    const playIcon = n.isVideo ? '▶ ' : '';
-    return `
-    <div class="hot-news-item" data-idx="${i}" style="display:flex;align-items:flex-start;gap:8px;padding:10px 0;border-bottom:1px solid var(--border);cursor:default;">
-      <span style="flex-shrink:0;width:20px;text-align:center;font-size:12px;color:var(--muted);font-weight:700;margin-top:1px;">${i + 1}</span>
-      <div style="flex:1;min-width:0;">
-        <div class="hot-news-title" data-idx="${i}" style="font-size:13px;font-weight:600;line-height:1.5;color:var(--ink-1);${n.link ? 'cursor:pointer;' : ''}">${playIcon}${escapeHTML(n.title)}</div>
-        ${n.desc ? `<div style="font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">${escapeHTML(n.desc)}</div>` : ''}
-        <div style="display:flex;gap:6px;align-items:center;margin-top:4px;font-size:11px;color:var(--muted);flex-wrap:wrap;">
-          <span style="background:var(--surface-2);padding:1px 6px;border-radius:4px;">${escapeHTML(n.source)}</span>
-          <span style="background:var(--accent-soft);color:var(--accent-ink);padding:1px 6px;border-radius:4px;">${escapeHTML(n.category)}</span>
-          ${videoTag}${offTag}
-        </div>
-      </div>
-      <button class="collect-news-btn" data-idx="${i}" style="flex-shrink:0;font-size:11px;padding:4px 10px;border:1px solid var(--accent);border-radius:6px;background:var(--accent-soft);color:var(--accent-ink);cursor:pointer;white-space:nowrap;">⭐ 收藏</button>
-    </div>`;
-  }).join('');
-  // 绑定标题点击打开原文
-  box.querySelectorAll('.hot-news-title').forEach(el => {
-    el.addEventListener('click', () => {
-      const idx = +el.dataset.idx;
-      const n = list[idx];
-      if (n && n.link) window.open(n.link, '_blank');
-    });
-  });
-  // 绑定收藏按钮
-  box.querySelectorAll('.collect-news-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const idx = +btn.dataset.idx;
-      const n = list[idx];
-      if (!n) return;
-      // 检查是否已收藏（按标题）
-      const dup = DB.genericRecords.find(r => r.pid === currentPid && r.title === n.title);
-      if (dup) { toast('已收藏过这条资讯'); return; }
-      DB.genericRecords.push({
-        id: uid(), pid: currentPid, date: todayStr(), title: n.title,
-        content: n.desc || '', source: n.source, category: n.category,
-        importance: '一般', link: n.link || '', tags: [], ts: Date.now()
-      });
-      DB.save(); renderAll(); toast('已收藏到我的记录');
-      btn.textContent = '✓ 已收藏'; btn.style.opacity = '0.6'; btn.disabled = true;
-    });
-  });
 }
 
 function renderNewsList(records) {
@@ -4586,13 +4532,16 @@ function renderTravelList(records) {
     wrap.innerHTML = emptyHTML('folder', '还没有行程', '点击上方按钮添加你的第一次旅行');
     return;
   }
-  wrap.innerHTML = records.map(r => `
-    <div class="history-card glass" style="margin-bottom:12px;" data-id="${r.id}">
+  wrap.innerHTML = records.map(r => {
+    const cd = r.costDetail || {};
+    const hasCostDetail = cd.transport || cd.hotel || cd.food || cd.ticket || cd.other;
+    return `
+    <div class="history-card glass" style="margin-bottom:12px;${r.isPlan?'border-left:3px solid var(--warning);':''}" data-id="${r.id}">
       <div class="history-head">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <span style="font-size:20px;">${r.tripType === '出差' ? '💼' : '✈️'}</span>
+          <span style="font-size:20px;">${r.isPlan ? '📌' : (r.tripType === '出差' ? '💼' : '✈️')}</span>
           <div>
-            <div style="font-size:15px;font-weight:700;">${escapeHTML(r.location || '未填地点')}</div>
+            <div style="font-size:15px;font-weight:700;">${escapeHTML(r.location || '未填地点')} ${r.isPlan ? '<span style="font-size:11px;color:var(--warning);font-weight:600;">计划中</span>' : ''}</div>
             <div style="font-size:11px;color:var(--muted);margin-top:2px;">
               ${r.dateStart || '?'} ~ ${r.dateEnd || '?'} · ${escapeHTML(r.tripType || '旅行')}
             </div>
@@ -4603,16 +4552,18 @@ function renderTravelList(records) {
           <button class="history-del" data-act="del">删除</button>
         </div>
       </div>
+      ${r.image ? `<img src="${r.image}" style="max-width:100%;max-height:200px;border-radius:8px;margin:6px 0;display:block;" />` : ''}
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px 14px;margin:8px 0 10px;">
         ${r.explore ? `<div style="font-size:12px;"><b style="color:var(--muted);font-weight:500;">探索：</b>${escapeHTML(r.explore)}</div>` : ''}
         ${r.transport ? `<div style="font-size:12px;"><b style="color:var(--muted);font-weight:500;">交通：</b>${escapeHTML(r.transport)}</div>` : ''}
-        ${r.cost ? `<div style="font-size:12px;"><b style="color:var(--muted);font-weight:500;">花费：</b>¥${escapeHTML(r.cost)}</div>` : ''}
+        ${hasCostDetail ? `<div style="font-size:12px;grid-column:1/-1;"><b style="color:var(--muted);font-weight:500;">花费明细：</b>${[cd.transport?`车费¥${escapeHTML(cd.transport)}`:'',cd.hotel?`住宿¥${escapeHTML(cd.hotel)}`:'',cd.food?`餐饮¥${escapeHTML(cd.food)}`:'',cd.ticket?`门票¥${escapeHTML(cd.ticket)}`:'',cd.other?`其他¥${escapeHTML(cd.other)}`:''].filter(Boolean).join(' · ')}${r.cost?` = ¥${escapeHTML(r.cost)}`:''}</div>` : (r.cost ? `<div style="font-size:12px;"><b style="color:var(--muted);font-weight:500;">花费：</b>¥${escapeHTML(r.cost)}</div>` : '')}
         ${r.people ? `<div style="font-size:12px;"><b style="color:var(--muted);font-weight:500;">同行：</b>${escapeHTML(r.people)}人</div>` : ''}
       </div>
       ${r.notes ? `<div class="history-block"><div class="history-note">${escapeHTML(r.notes)}</div></div>` : ''}
+      ${r.moments && r.moments.length ? `<div style="margin-top:8px;"><div style="font-size:12px;color:var(--muted);margin-bottom:4px;">🌅 美好时刻（${r.moments.length}）</div><div style="display:flex;gap:6px;flex-wrap:wrap;">${r.moments.map(m => `<img src="${m}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;" />`).join('')}</div></div>` : ''}
       ${r.recommend ? `<div style="margin-top:10px;"><span class="tag-opt sel" style="font-size:11px;padding:3px 10px;background:${r.recommend === '推荐' || r.recommend === '强烈推荐' ? 'var(--success)' : 'var(--danger)'};border-color:transparent;">${r.recommend === '推荐' || r.recommend === '强烈推荐' ? '👍' : '👎'} ${escapeHTML(r.recommend)}</span></div>` : ''}
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
   wrap.querySelectorAll('[data-id]').forEach(el => {
     const id = +el.dataset.id;
     el.style.cursor = 'pointer';
@@ -4624,7 +4575,6 @@ function renderTravelList(records) {
       e.stopPropagation();
       DB.travelRecords = DB.travelRecords.filter(x => x.id !== id); DB.save(); renderAll(); toast('记录已删除');
     });
-    // 整卡点击即可编辑
     el.addEventListener('click', (e) => {
       if (e.target.closest('[data-act="del"]') || e.target.closest('[data-act="edit"]')) return;
       const rec = DB.travelRecords.find(x => x.id === id);
@@ -4634,9 +4584,16 @@ function renderTravelList(records) {
 }
 
 function openTravelEditor(existing) {
-  const e = existing || { dateStart: '', dateEnd: '', tripType: '旅行', location: '', explore: '', transport: '', cost: '', people: '', recommend: '推荐', notes: '' };
+  const e = existing || { dateStart: '', dateEnd: '', tripType: '旅行', location: '', explore: '', transport: '', cost: '', costDetail: { transport:'', hotel:'', food:'', ticket:'', other:'' }, people: '', recommend: '推荐', notes: '', image: '', moments: [], isPlan: false };
+  const cd = e.costDetail || { transport:'', hotel:'', food:'', ticket:'', other:'' };
+  let currentImg = e.image || '';
+  let moments = [...(e.moments || [])];
   openModal(`
     <div class="modal-title">${existing ? '编辑行程' : '添加行程'} · 沿途印记</div>
+    <div class="field" style="display:flex;align-items:center;gap:8px;">
+      <input type="checkbox" id="t-plan" ${e.isPlan?'checked':''} style="width:18px;height:18px;cursor:pointer;" />
+      <label for="t-plan" style="font-size:14px;cursor:pointer;">标记为计划景点（还没去过，计划中）</label>
+    </div>
     <div class="field"><label class="field-label">📍 城市或地点 *</label><input class="field-input" id="t-loc" value="${escapeHTML(e.location)}" placeholder="如：成都、西安、东京..." /></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
       <div class="field"><label class="field-label">📅 到达日期 *</label><input class="field-input" id="t-ds" type="date" value="${e.dateStart}" /></div>
@@ -4656,16 +4613,83 @@ function openTravelEditor(existing) {
       </select></div>
     </div>
     <div class="field"><label class="field-label">🗺️ 探索路过哪些地方？</label><textarea class="field-area" id="t-ex" placeholder="如：宽窄巷子、熊猫基地、锦里古街...">${escapeHTML(e.explore)}</textarea></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-      <div class="field"><label class="field-label">💰 花费情况（元）</label><input class="field-input" id="t-cost" value="${escapeHTML(e.cost)}" placeholder="如：2800" inputmode="numeric" /></div>
-      <div class="field"><label class="field-label">👥 同行人数</label><input class="field-input" id="t-pp" value="${escapeHTML(e.people)}" placeholder="如：2" inputmode="numeric" /></div>
+    <div class="field"><label class="field-label">💰 花费明细（元）</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <input class="field-input" id="t-cost-transport" value="${escapeHTML(cd.transport)}" placeholder="🚄 车费" inputmode="numeric" />
+        <input class="field-input" id="t-cost-hotel" value="${escapeHTML(cd.hotel)}" placeholder="🏨 住宿" inputmode="numeric" />
+        <input class="field-input" id="t-cost-food" value="${escapeHTML(cd.food)}" placeholder="🍽️ 餐饮" inputmode="numeric" />
+        <input class="field-input" id="t-cost-ticket" value="${escapeHTML(cd.ticket)}" placeholder="🎫 门票" inputmode="numeric" />
+        <input class="field-input" id="t-cost-other" value="${escapeHTML(cd.other)}" placeholder="📦 其他" inputmode="numeric" />
+      </div>
+    </div>
+    <div class="field"><label class="field-label">👥 同行人数</label><input class="field-input" id="t-pp" value="${escapeHTML(e.people)}" placeholder="如：2" inputmode="numeric" /></div>
+    <div class="field"><label class="field-label">📷 行程封面图（可选）</label>
+      <input type="file" accept="image/*" id="t-img-input" style="display:none;" />
+      <div id="t-img-wrap" style="position:relative;border:1px dashed var(--border);border-radius:8px;text-align:center;cursor:pointer;overflow:hidden;">
+        ${currentImg ? `<img src="${currentImg}" style="max-width:100%;max-height:160px;border-radius:8px;display:block;margin:0 auto;" /><button type="button" id="t-img-del" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:14px;line-height:1;">×</button>` : `<div style="color:var(--muted);font-size:13px;padding:20px 0;">📷 点击上传行程封面图（可选）</div>`}
+      </div>
+    </div>
+    <div class="field"><label class="field-label">🌅 美好时刻（风景美照，最多5张）</label>
+      <input type="file" accept="image/*" id="t-moment-input" style="display:none;" multiple />
+      <div id="t-moment-wrap" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      <button type="button" class="btn btn-ghost" id="t-moment-add" style="margin-top:8px;padding:6px 12px;font-size:12px;">➕ 添加照片</button>
     </div>
     <div class="field"><label class="field-label">⭐ 推荐感受</label><div class="tag-pick" id="t-rec">
       ${['强烈推荐','推荐','一般','不推荐','强烈不推荐'].map(t => `<button class="tag-opt ${e.recommend===t?'sel':''}" data-v="${t}">${t}</button>`).join('')}
     </div></div>
-    <div class="field"><label class="field-label">✍️ 感受 / 灵光一现（选填）</label><textarea class="field-area" id="t-note" placeholder="写下这次旅行的心情、发现、值得记录的瞬间...">${escapeHTML(e.notes)}</textarea></div>
+    <div class="field"><label class="field-label">✍️ 游记 / 感受（选填）</label><textarea class="field-area" id="t-note" placeholder="写下这次旅行的心情、发现、值得记录的瞬间...">${escapeHTML(e.notes)}</textarea></div>
     <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">取消</button><button class="btn btn-primary" id="t-save">保存</button></div>
   `);
+  // 封面图
+  const imgWrap = $('#t-img-wrap');
+  const imgInput = $('#t-img-input');
+  function refreshImg() {
+    imgWrap.innerHTML = currentImg ? `<img src="${currentImg}" style="max-width:100%;max-height:160px;border-radius:8px;display:block;margin:0 auto;" /><button type="button" id="t-img-del" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:14px;line-height:1;">×</button>` : `<div style="color:var(--muted);font-size:13px;padding:20px 0;">📷 点击上传行程封面图（可选）</div>`;
+  }
+  imgWrap.addEventListener('click', (ev) => {
+    if (ev.target.id === 't-img-del') { currentImg = ''; refreshImg(); return; }
+    if (ev.target.tagName !== 'BUTTON') imgInput.click();
+  });
+  imgInput.addEventListener('change', (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { toast('图片不能超过5MB'); return; }
+    const reader = new FileReader();
+    reader.onload = (ev) => { currentImg = ev.target.result; refreshImg(); };
+    reader.readAsDataURL(file);
+  });
+  // 美好时刻
+  const momentWrap = $('#t-moment-wrap');
+  const momentInput = $('#t-moment-input');
+  function refreshMoments() {
+    momentWrap.innerHTML = moments.map((m, i) => `<div style="position:relative;width:72px;height:72px;"><img src="${m}" style="width:72px;height:72px;object-fit:cover;border-radius:6px;" /><button type="button" data-mi="${i}" style="position:absolute;top:-4px;right:-4px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:50%;width:18px;height:18px;cursor:pointer;font-size:11px;line-height:1;">×</button></div>`).join('');
+  }
+  refreshMoments();
+  momentWrap.addEventListener('click', (ev) => {
+    if (ev.target.tagName === 'BUTTON') {
+      const i = +ev.target.dataset.mi;
+      moments.splice(i, 1);
+      refreshMoments();
+    }
+  });
+  $('#t-moment-add').addEventListener('click', () => {
+    if (moments.length >= 5) { toast('最多5张照片'); return; }
+    momentInput.click();
+  });
+  momentInput.addEventListener('change', (ev) => {
+    const files = Array.from(ev.target.files);
+    const remain = 5 - moments.length;
+    const toAdd = files.slice(0, remain);
+    if (toAdd.length === 0) { toast('最多5张照片'); return; }
+    let loaded = 0;
+    toAdd.forEach(file => {
+      if (file.size > 5 * 1024 * 1024) { toast(`${file.name} 超过5MB，已跳过`); loaded++; checkDone(); return; }
+      const reader = new FileReader();
+      reader.onload = (e) => { moments.push(e.target.result); loaded++; checkDone(); };
+      reader.readAsDataURL(file);
+    });
+    function checkDone() { if (loaded >= toAdd.length) { refreshMoments(); ev.target.value = ''; } }
+  });
   $('#t-rec').querySelectorAll('.tag-opt').forEach(b => b.addEventListener('click', () => {
     $('#t-rec').querySelectorAll('.tag-opt').forEach(x => x.classList.remove('sel')); b.classList.add('sel');
   }));
@@ -4674,6 +4698,14 @@ function openTravelEditor(existing) {
     if (!location) { toast('请填写地点'); return; }
     const dateStart = $('#t-ds').value;
     if (!dateStart) { toast('请选择到达日期'); return; }
+    const costDetail = {
+      transport: $('#t-cost-transport').value.trim(),
+      hotel: $('#t-cost-hotel').value.trim(),
+      food: $('#t-cost-food').value.trim(),
+      ticket: $('#t-cost-ticket').value.trim(),
+      other: $('#t-cost-other').value.trim()
+    };
+    const totalCost = Object.values(costDetail).reduce((s, v) => s + (parseFloat(v)||0), 0);
     const data = {
       pid: currentPid,
       location,
@@ -4682,10 +4714,14 @@ function openTravelEditor(existing) {
       tripType: $('#t-type').value,
       transport: $('#t-tr').value,
       explore: $('#t-ex').value.trim(),
-      cost: $('#t-cost').value.trim(),
+      cost: totalCost > 0 ? String(totalCost) : '',
+      costDetail,
       people: $('#t-pp').value.trim(),
       recommend: $('#t-rec').querySelector('.tag-opt.sel')?.dataset.v || '推荐',
       notes: $('#t-note').value.trim(),
+      image: currentImg,
+      moments: moments.slice(),
+      isPlan: $('#t-plan').checked,
       ts: Date.now()
     };
     if (existing) { Object.assign(existing, data); }
@@ -4785,7 +4821,9 @@ function openMovieEditor(existing) {
     </div>
     <div class="field"><label class="field-label">🏷️ 标签（可多选）</label><div class="tag-pick" id="m-tags">
       ${allTags.map(t => `<button class="tag-opt ${pickedTags.includes(t)?'sel':''}" data-v="${t}">${t}</button>`).join('')}
-    </div></div>
+      ${pickedTags.filter(t => !allTags.includes(t)).map(t => `<button class="tag-opt sel" data-v="${escapeHTML(t)}" data-custom="1">${escapeHTML(t)} ✕</button>`).join('')}
+    </div>
+    <input class="field-input" id="m-tag-input" placeholder="+ 输入自定义标签后回车添加" style="margin-top:8px;" /></div>
     <div class="field"><label class="field-label">✍️ 观后感 *</label><textarea class="field-area" id="m-review" placeholder="这部电影给你什么感受？哪个情节最打动你？演员表演如何？" style="min-height:100px;">${escapeHTML(e.review)}</textarea></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
       <div class="field"><label class="field-label">🔁 是否值得二刷？</label><div class="tag-pick" id="m-re">
@@ -4800,9 +4838,34 @@ function openMovieEditor(existing) {
   `);
   $('#m-tags').querySelectorAll('.tag-opt').forEach(b => b.addEventListener('click', () => {
     const v = b.dataset.v;
+    if (b.dataset.custom) {
+      pickedTags = pickedTags.filter(x => x !== v);
+      b.remove();
+      return;
+    }
     if (pickedTags.includes(v)) { pickedTags = pickedTags.filter(x => x !== v); b.classList.remove('sel'); }
     else { pickedTags.push(v); b.classList.add('sel'); }
   }));
+  $('#m-tag-input').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      const v = ev.target.value.trim();
+      if (!v) return;
+      if (pickedTags.includes(v)) { toast('标签已存在'); return; }
+      pickedTags.push(v);
+      const btn = document.createElement('button');
+      btn.className = 'tag-opt sel';
+      btn.dataset.v = v;
+      btn.dataset.custom = '1';
+      btn.textContent = v + ' ✕';
+      btn.addEventListener('click', () => {
+        pickedTags = pickedTags.filter(x => x !== v);
+        btn.remove();
+      });
+      $('#m-tags').appendChild(btn);
+      ev.target.value = '';
+    }
+  });
   $('#m-re').querySelectorAll('.tag-opt').forEach(b => b.addEventListener('click', () => {
     $('#m-re').querySelectorAll('.tag-opt').forEach(x => x.classList.remove('sel')); b.classList.add('sel');
   }));
@@ -4925,9 +4988,8 @@ function openGoodsEditor(existing) {
       <input type="file" id="g-img-input" accept="image/*" style="display:none;" />
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-      <div class="field"><label class="field-label">📂 分类</label><select class="field-input" id="g-cat">
-        ${categories.map(c => `<option ${e.category===c?'selected':''}>${c}</option>`).join('')}
-      </select></div>
+      <div class="field"><label class="field-label">📂 分类</label><input class="field-input" id="g-cat" list="g-cat-list" placeholder="如：数码 / 家居" value="${escapeHTML(e.category||'')}" />
+      <datalist id="g-cat-list">${categories.map(c => `<option value="${c}">`).join('')}</datalist></div>
       <div class="field"><label class="field-label">⭐ 推荐星级</label><div class="tag-pick" id="g-rate">
         ${['1','2','3','4','5'].map(n => `<button class="tag-opt ${e.rating===n?'sel':''}" data-v="${n}">${'★'.repeat(+n)}</button>`).join('')}
       </div></div>
@@ -5032,7 +5094,7 @@ function renderProjectTasks() {
       </button>
       <button class="add-btn" id="pAddTask"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
       <input type="file" id="pTaskImgFile" accept="image/*" style="display:none;" />
-      <input type="datetime-local" id="pTaskRemindInput" style="display:none;" />
+      <input type="datetime-local" id="pTaskRemindInput" style="position:absolute;opacity:0;width:1px;height:1px;pointer-events:none;" />
     </div>
     <div id="pTaskRemindPreviewBox" style="display:none;margin-top:8px;font-size:12px;color:var(--warning);align-items:center;gap:6px;">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>
@@ -5415,6 +5477,7 @@ function renderProjectNotes() {
     </div>`).join('')}</div>`;
   panel.querySelectorAll('.note-card').forEach(el => {
     const id = +el.dataset.id;
+    el.addEventListener('click', () => openNoteModal(id));
     el.querySelector('[data-act="del"]').addEventListener('click', (e) => {
       e.stopPropagation();
       DB.notes = DB.notes.filter(x => x.id !== id); DB.save(); renderAll(); toast('笔记已删除');
@@ -5422,37 +5485,56 @@ function renderProjectNotes() {
   });
 }
 
+
 function renderProjectStats() {
   const panel = $('#panel-stats');
   if (!panel) return;
   const p = DB.projects.find(x => x.id === currentPid);
-  const tasks = DB.tasks.filter(t => t.pid === currentPid);
-  const done = tasks.filter(t => t.done).length;
-  const total = tasks.length;
-  const rate = total ? done/total : 0;
+  if (!p) return;
+  const rt = p.recordType;
+  if (rt === 'health' || p.module === '健康') return renderHealthStats(p, panel);
+  if (rt === 'travel' || p.module === '旅行') return renderTravelStats(p, panel);
+  if (rt === 'movie' || p.module === '娱乐') return renderMovieStats(p, panel);
+  if (rt === 'goods' || p.module === '好物') return renderGoodsStats(p, panel);
+  if (p.tabs && p.tabs.includes('recipes')) return renderRecipeStats(p, panel);
+  return renderGenericStats(p, panel);
+}
 
-  // 7日柱状图
+// 通用环形图辅助
+function ringChartHTML(rate, centerNum, centerLbl, color, infoRows) {
+  const r = 48, C = 2 * Math.PI * r;
+  return `<div class="ring-wrap">
+    <div class="ring">
+      <svg width="110" height="110" viewBox="0 0 110 110">
+        <circle class="ring-track" cx="55" cy="55" r="${r}"/>
+        <circle class="ring-prog" cx="55" cy="55" r="${r}" stroke="${color}" stroke-dasharray="${C}" stroke-dashoffset="${C*(1-rate)}"/>
+      </svg>
+      <div class="ring-text"><div><div class="ring-num">${centerNum}</div><div class="ring-lbl">${centerLbl}</div></div></div>
+    </div>
+    <div class="ring-info">${infoRows.map(r => `<div class="ring-info-row"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('')}</div>
+  </div>`;
+}
+
+// 通用统计（阅读/工作/新闻等）
+function renderGenericStats(p, panel) {
+  const recs = DB.genericRecords.filter(r => r.pid === currentPid);
+  const doneRecs = recs.filter(r => r.done).length;
+  const rate = recs.length ? doneRecs/recs.length : 0;
+  const noteCount = DB.notes.filter(n => n.pid === currentPid).length;
   const days = [];
   const today = new Date();
   for (let i = 6; i >= 0; i--) {
     const d = new Date(today); d.setDate(d.getDate() - i);
+    const dStr = d.toISOString().slice(0,10);
     const label = ['日','一','二','三','四','五','六'][d.getDay()];
-    const count = tasks.filter(t => t.done && t.doneTs && new Date(t.doneTs).toDateString() === d.toDateString()).length
-      || tasks.filter(t => t.done && new Date(t.ts).toDateString() === d.toDateString()).length;
+    const count = recs.filter(r => (r.date||'') === dStr).length;
     days.push({ label, count, isToday: i === 0 });
   }
   const max = Math.max(...days.map(d => d.count), 1);
-
-  // 优先级分布
-  const todo = tasks.filter(t => !t.done);
-  const dist = { high: 0, mid: 0, low: 0 };
-  todo.forEach(t => dist[t.pri]++);
-  const maxPri = Math.max(...Object.values(dist), 1);
-
   panel.innerHTML = `
     <div class="chart-card">
-      <div class="chart-title">近 7 天完成</div>
-      <div class="chart-desc">每天完成的任务数量</div>
+      <div class="chart-title">近 7 天记录</div>
+      <div class="chart-desc">每天的记录数量</div>
       <div class="bar-chart">${days.map(d => `
         <div class="bar-col"><span class="bar-val">${d.count}</span>
           <div class="bar-fill ${d.isToday?'today':''}" style="height:${d.count/max*100}%;background:linear-gradient(180deg,${p.color},${p.color}cc)"></div>
@@ -5460,34 +5542,168 @@ function renderProjectStats() {
     </div>
     <div class="chart-card">
       <div class="chart-title">完成率</div>
-      <div class="chart-desc">已完成 / 总任务</div>
-      <div class="ring-wrap">
-        <div class="ring">
-          <svg width="110" height="110" viewBox="0 0 110 110">
-            <circle class="ring-track" cx="55" cy="55" r="48"/>
-            <circle class="ring-prog" cx="55" cy="55" r="48" stroke="${p.color}" stroke-dasharray="${2*Math.PI*48}" stroke-dashoffset="${2*Math.PI*48*(1-rate)}"/>
-          </svg>
-          <div class="ring-text"><div><div class="ring-num">${Math.round(rate*100)}%</div><div class="ring-lbl">完成率</div></div></div>
-        </div>
-        <div class="ring-info">
-          <div class="ring-info-row"><span>总任务</span><span>${total}</span></div>
-          <div class="ring-info-row"><span>已完成</span><span>${done}</span></div>
-          <div class="ring-info-row"><span>待办</span><span>${total - done}</span></div>
-          <div class="ring-info-row"><span>笔记数</span><span>${DB.notes.filter(n=>n.pid===currentPid).length}</span></div>
-        </div>
-      </div>
-    </div>
-    <div class="chart-card">
-      <div class="chart-title">优先级分布</div>
-      <div class="chart-desc">当前待办任务按优先级</div>
-      ${[{'k':'high','l':'高优先级','c':'var(--accent)'},{'k':'mid','l':'中优先级','c':'var(--warning)'},{'k':'low','l':'低优先级','c':'var(--success)'}].map(r => `
-        <div style="margin-bottom:12px;">
-          <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;"><span>${r.l}</span><span style="font-weight:600;">${dist[r.k]}</span></div>
-          <div style="height:8px;background:var(--surface-2);border-radius:4px;overflow:hidden;"><div style="height:100%;width:${dist[r.k]/maxPri*100}%;background:${r.c};border-radius:4px;transition:width .5s;"></div></div>
-        </div>`).join('') || '<div style="color:var(--muted);font-size:13px;text-align:center;padding:16px;">没有待办任务</div>'}
+      <div class="chart-desc">任务与记录完成情况</div>
+      ${ringChartHTML(rate, Math.round(rate*100)+'%', '完成率', p.color, [
+        ['总记录', recs.length],
+        ['已完成', doneRecs],
+        ['待完成', recs.length - doneRecs],
+        ['笔记数', noteCount]
+      ])}
     </div>
   `;
 }
+
+// 健身统计
+function renderHealthStats(p, panel) {
+  const recs = DB.records.filter(r => r.pid === currentPid);
+  const weeklyGoal = parseInt(localStorage.getItem('wb_weekly_exercise_days') || '3');
+  const startDate = localStorage.getItem('wb_stats_start_date') || '';
+  const filteredRecs = startDate ? recs.filter(r => r.date >= startDate) : recs;
+  let totalSets = 0, totalBurn = 0;
+  filteredRecs.forEach(r => {
+    (r.training||[]).forEach(t => { totalSets += parseInt(t.sets)||0; totalBurn += parseFloat(t.cal)||0; });
+  });
+  const trainDays = new Set(filteredRecs.filter(r => (r.training&&r.training.length>0)||(r.dailyActivities&&r.dailyActivities.length>0)).map(r => r.date)).size;
+  const now = new Date();
+  const weekStart = new Date(now); weekStart.setDate(now.getDate() - ((now.getDay()+6)%7));
+  const weekStartStr = weekStart.toISOString().slice(0,10);
+  const weekTrainDays = new Set(recs.filter(r => r.date >= weekStartStr && ((r.training&&r.training.length>0)||(r.dailyActivities&&r.dailyActivities.length>0))).map(r => r.date)).size;
+  const weekRate = weeklyGoal > 0 ? Math.min(1, weekTrainDays/weeklyGoal) : 0;
+  panel.innerHTML = `
+    <div class="chart-card">
+      <div class="chart-title">训练概览</div>
+      <div class="chart-desc">${startDate?'从 '+startDate+' 开始':'全部记录'}</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:8px;">
+        <div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:var(--accent);">${totalSets}</div><div style="font-size:11px;color:var(--muted);">累计训练组数</div></div>
+        <div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:var(--success);">${trainDays}</div><div style="font-size:11px;color:var(--muted);">实际训练天数</div></div>
+        <div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:var(--purple);">${totalBurn}</div><div style="font-size:11px;color:var(--muted);">累计消耗kcal</div></div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:12px;color:var(--muted);">预设每周运动天数</label>
+        <input type="number" min="1" max="7" value="${weeklyGoal}" id="weeklyExerciseDays" style="width:50px;padding:4px;border:1px solid var(--border);border-radius:6px;background:var(--surface-1);color:var(--ink-1);text-align:center;" />
+        <label style="font-size:12px;color:var(--muted);margin-left:8px;">统计起始日期</label>
+        <input type="date" value="${startDate}" id="statsStartDate" style="font-size:12px;padding:4px;border:1px solid var(--border);border-radius:6px;background:var(--surface-1);color:var(--ink-1);" />
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">训练打卡达成率</div>
+      <div class="chart-desc">本周实际训练天数 ÷ 预设每周运动天数</div>
+      ${ringChartHTML(weekRate, weekTrainDays+'/'+weeklyGoal, '训练打卡', p.color, [
+        ['本周训练天数', weekTrainDays],
+        ['预设每周天数', weeklyGoal],
+        ['累计训练天数', trainDays],
+        ['累计消耗', totalBurn+'kcal']
+      ])}
+    </div>
+  `;
+  const wed = panel.querySelector('#weeklyExerciseDays');
+  if (wed) wed.addEventListener('change', () => { localStorage.setItem('wb_weekly_exercise_days', wed.value); renderProjectStats(); });
+  const ssd = panel.querySelector('#statsStartDate');
+  if (ssd) ssd.addEventListener('change', () => { localStorage.setItem('wb_stats_start_date', ssd.value); renderProjectStats(); });
+}
+
+// 菜谱统计
+function renderRecipeStats(p, panel) {
+  const recipes = DB.notes.filter(n => n.pid === currentPid);
+  const cooked = recipes.filter(r => r.cooked).length;
+  const total = recipes.length;
+  const rate = total ? cooked/total : 0;
+  panel.innerHTML = `
+    <div class="chart-card">
+      <div class="chart-title">菜谱概览</div>
+      <div class="chart-desc">收藏的菜谱数量</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:8px;">
+        <div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:var(--accent);">${total}</div><div style="font-size:11px;color:var(--muted);">总菜谱数</div></div>
+        <div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:var(--success);">${cooked}</div><div style="font-size:11px;color:var(--muted);">已做过</div></div>
+        <div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:var(--warning);">${total-cooked}</div><div style="font-size:11px;color:var(--muted);">未做过</div></div>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">菜谱完成度</div>
+      <div class="chart-desc">已做过 / 总菜谱数</div>
+      ${ringChartHTML(rate, Math.round(rate*100)+'%', '完成度', p.color, [
+        ['总菜谱数', total],
+        ['已做过', cooked],
+        ['未做过', total - cooked]
+      ])}
+    </div>
+  `;
+}
+
+// 旅行统计
+function renderTravelStats(p, panel) {
+  const recs = DB.travelRecords.filter(r => r.pid === currentPid);
+  const provinces = new Set(recs.map(r => (r.location||'').split(/[,，省市区县]/)[0]).filter(x => x)).size;
+  const visitedCount = recs.filter(r => !r.isPlan).length;
+  const planCount = recs.filter(r => r.isPlan).length;
+  const noteCount = DB.notes.filter(n => n.pid === currentPid).length;
+  const rate = recs.length ? visitedCount/recs.length : 0;
+  panel.innerHTML = `
+    <div class="chart-card">
+      <div class="chart-title">旅途概览</div>
+      <div class="chart-desc">旅行足迹统计</div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:8px;">
+        <div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:var(--accent);">${visitedCount}</div><div style="font-size:11px;color:var(--muted);">去过的地方</div></div>
+        <div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:var(--success);">${provinces}</div><div style="font-size:11px;color:var(--muted);">去过的省份</div></div>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">旅途达成度</div>
+      <div class="chart-desc">实际打卡景点数 ÷ 旅行计划景点总数</div>
+      ${ringChartHTML(rate, visitedCount+'/'+recs.length, '达成度', p.color, [
+        ['计划景点数', recs.length],
+        ['已去景点数', visitedCount],
+        ['未去景点数', recs.length - visitedCount],
+        ['游记数', noteCount]
+      ])}
+    </div>
+  `;
+}
+
+// 观影统计
+function renderMovieStats(p, panel) {
+  const recs = DB.movieRecords.filter(r => r.pid === currentPid);
+  const planCount = DB.tasks.filter(t => t.pid === currentPid && !t.done).length;
+  panel.innerHTML = `
+    <div class="chart-card">
+      <div class="chart-title">观影概览</div>
+      <div class="chart-desc">已看影片数量</div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:8px;">
+        <div style="text-align:center;"><div style="font-size:28px;font-weight:700;color:var(--accent);">${recs.length}</div><div style="font-size:11px;color:var(--muted);">已看影片</div></div>
+        <div style="text-align:center;"><div style="font-size:28px;font-weight:700;color:var(--warning);">${planCount}</div><div style="font-size:11px;color:var(--muted);">想看(待办)</div></div>
+      </div>
+    </div>
+  `;
+}
+
+// 好物统计
+function renderGoodsStats(p, panel) {
+  const recs = DB.goodsRecords.filter(r => r.pid === currentPid);
+  const tasks = DB.tasks.filter(t => t.pid === currentPid);
+  const done = tasks.filter(t => t.done).length;
+  const total = tasks.length;
+  const rate = total ? done/total : 0;
+  panel.innerHTML = `
+    <div class="chart-card">
+      <div class="chart-title">好物概览</div>
+      <div class="chart-desc">收藏的好物数量</div>
+      <div style="text-align:center;padding:16px;">
+        <div style="font-size:36px;font-weight:700;color:var(--accent);">${recs.length}</div>
+        <div style="font-size:13px;color:var(--muted);">好物数量</div>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">完成率</div>
+      <div class="chart-desc">任务完成情况</div>
+      ${ringChartHTML(rate, Math.round(rate*100)+'%', '完成率', p.color, [
+        ['总任务', total],
+        ['已完成', done],
+        ['待办', total - done]
+      ])}
+    </div>
+  `;
+}
+
 
 /* ===== 统一渲染 ===== */
 function renderAll() {
@@ -5803,7 +6019,7 @@ function openTaskModal(existingTask) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>
         <span id="mTaskRemindText">不提醒</span>
       </div>
-      <input type="datetime-local" id="mTaskRemindInput" style="display:none;" />
+      <input type="datetime-local" id="mTaskRemindInput" style="position:absolute;opacity:0;width:1px;height:1px;pointer-events:none;" />
       <div class="remind-quick-btns" id="mTaskRemindQuick">
         <button type="button" class="remind-quick-btn" data-min="30">30分钟后</button>
         <button type="button" class="remind-quick-btn" data-min="60">1小时后</button>
@@ -6081,27 +6297,44 @@ function openTaskImageViewer(images, startIdx) {
   });
 }
 
-function openNoteModal() {
-  let tag = '心得';
+function openNoteModal(editId) {
+  const editNote = editId ? DB.notes.find(n => n.id === editId) : null;
+  let tag = editNote ? (editNote.tag || '心得') : '心得';
+  const presetNoteTags = ['心得', '知识点', '计划', '其他'];
+  const noteTagIsPreset = presetNoteTags.includes(tag);
+  const projName = escapeHTML(DB.projects.find(p=>p.id===currentPid).name);
   openModal(`
-    <div class="modal-title">添加笔记到「${escapeHTML(DB.projects.find(p=>p.id===currentPid).name)}」</div>
-    <div class="field"><label class="field-label">标题</label><input class="field-input" id="mNoteTitle" placeholder="笔记标题" maxlength="40" /></div>
-    <div class="field"><label class="field-label">内容</label><textarea class="field-area" id="mNoteContent" placeholder="写下你的想法..." maxlength="500"></textarea></div>
+    <div class="modal-title">${editNote?'编辑':'添加'}心得到「${projName}」</div>
+    <div class="field"><label class="field-label">标题</label><input class="field-input" id="mNoteTitle" placeholder="心得标题" maxlength="40" value="${editNote?escapeHTML(editNote.title):''}" /></div>
+    <div class="field"><label class="field-label">内容</label><textarea class="field-area" id="mNoteContent" placeholder="写下你的想法..." maxlength="500">${editNote?escapeHTML(editNote.content):''}</textarea></div>
     <div class="field"><label class="field-label">标签</label><div class="tag-pick" id="mNoteTag">
-      <button class="tag-opt sel" data-v="心得">心得</button><button class="tag-opt" data-v="知识点">知识点</button><button class="tag-opt" data-v="计划">计划</button><button class="tag-opt" data-v="其他">其他</button>
-    </div></div>
+      ${presetNoteTags.map(t => `<button class="tag-opt ${noteTagIsPreset&&tag===t?'sel':''}" data-v="${t}">${t}</button>`).join('')}
+    </div>
+    <input class="field-input" id="mNoteTagInput" placeholder="或输入自定义标签" value="${noteTagIsPreset?'':escapeHTML(tag)}" style="margin-top:8px;" /></div>
     <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">取消</button><button class="btn btn-primary" id="mNoteSave">保存</button></div>
   `);
   $$('#mNoteTag .tag-opt').forEach(b => b.addEventListener('click', () => {
     $$('#mNoteTag .tag-opt').forEach(x => x.classList.remove('sel')); b.classList.add('sel'); tag = b.dataset.v;
+    $('#mNoteTagInput').value = '';
   }));
+  $('#mNoteTagInput').addEventListener('input', () => {
+    $$('#mNoteTag .tag-opt').forEach(x => x.classList.remove('sel'));
+    tag = $('#mNoteTagInput').value.trim();
+  });
   $('#mNoteTitle').focus();
   $('#mNoteSave').addEventListener('click', () => {
     const title = $('#mNoteTitle').value.trim();
     const content = $('#mNoteContent').value.trim();
     if (!title && !content) { toast('请输入标题或内容'); return; }
-    DB.notes.unshift({ id: uid(), pid: currentPid, title: title||'无标题', content, tag, ts: Date.now() });
-    DB.save(); closeModal(); renderAll(); toast('笔记已保存');
+    const finalTag = $('#mNoteTagInput').value.trim() || tag || '其他';
+    if (editNote) {
+      Object.assign(editNote, { title: title||'无标题', content, tag: finalTag });
+      toast('心得已更新');
+    } else {
+      DB.notes.unshift({ id: uid(), pid: currentPid, title: title||'无标题', content, tag: finalTag, ts: Date.now() });
+      toast('心得已保存');
+    }
+    DB.save(); closeModal(); renderAll();
   });
 }
 
