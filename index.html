@@ -1360,7 +1360,7 @@ ensureProject('wb_init_worksummary',
   }] }
 );
 ensureProject('wb_init_skills',
-  { id: Date.now() + 400, name: '技能学习', module: '学习', color: '#C99A2E', desc: '摄影/剪辑/编程等技能教程收藏', ts: Date.now() + 400, tabs: ['records','recipes','tasks','notes','stats'], defaultTab: 'recipes', recordType: 'skill' },
+  { id: Date.now() + 400, name: '技能学习', module: '学习', color: '#C99A2E', desc: '摄影/剪辑/编程等技能教程收藏', ts: Date.now() + 400, tabs: ['records','tasks','notes','stats'], defaultTab: 'records', recordType: 'skill' },
   { notes: [
     { id: Date.now() + 401, title: '摄影：三分构图法', tag: '摄影',
       content: '三分法（Rule of Thirds）：\n• 将画面横竖各分成三部分，形成井字格\n• 主体放在交叉点或分割线上，而不是中心\n• 视线、运动方向留出更多空白\n适用场景：人像、风景、静物摄影几乎都适用。',
@@ -1389,6 +1389,22 @@ if (_wbInitDirty) _origDBSave();
     if (p.name === '工作总结') { p.name = '复盘总结'; p.module = '复盘'; migrated = true; }
   });
   if (migrated) _origDBSave();
+}
+
+// 一次性补丁：移除"技能学习"项目的菜谱 tab（与技能学习无关）
+if (!localStorage.getItem('wb_fix_skill_tabs')) {
+  let fixed = false;
+  DB.projects.forEach(p => {
+    if (p.recordType === 'skill' || p.name === '技能学习') {
+      if (p.tabs && p.tabs.includes('recipes')) {
+        p.tabs = p.tabs.filter(t => t !== 'recipes');
+        if (p.defaultTab === 'recipes') p.defaultTab = 'records';
+        fixed = true;
+      }
+    }
+  });
+  if (fixed) _origDBSave();
+  localStorage.setItem('wb_fix_skill_tabs', '1');
 }
 
 let currentView = 'dashboard'; // dashboard | project
@@ -5473,14 +5489,18 @@ function renderProjectNotes() {
       <span class="note-tag" style="background:var(--accent-soft);color:var(--accent-ink);">${escapeHTML(n.tag||'笔记')}</span>
       <div class="note-title">${escapeHTML(n.title)}</div>
       <div class="note-content">${escapeHTML(n.content)}</div>
-      <div class="note-foot"><span class="note-time">${fmtTime(n.ts)}</span><button class="note-del" data-act="del">删除</button></div>
+      <div class="note-foot"><span class="note-time">${fmtTime(n.ts)}</span><button class="note-del" data-act="edit">编辑</button><button class="note-del" data-act="del">删除</button></div>
     </div>`).join('')}</div>`;
   panel.querySelectorAll('.note-card').forEach(el => {
     const id = +el.dataset.id;
-    el.addEventListener('click', () => openNoteModal(id));
+    el.addEventListener('click', () => openNoteViewer(id));
     el.querySelector('[data-act="del"]').addEventListener('click', (e) => {
       e.stopPropagation();
       DB.notes = DB.notes.filter(x => x.id !== id); DB.save(); renderAll(); toast('笔记已删除');
+    });
+    el.querySelector('[data-act="edit"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openNoteModal(id);
     });
   });
 }
@@ -5496,6 +5516,7 @@ function renderProjectStats() {
   if (rt === 'travel' || p.module === '旅行') return renderTravelStats(p, panel);
   if (rt === 'movie' || p.module === '娱乐') return renderMovieStats(p, panel);
   if (rt === 'goods' || p.module === '好物') return renderGoodsStats(p, panel);
+  if (rt === 'skill') return renderSkillStats(p, panel);
   if (p.tabs && p.tabs.includes('recipes')) return renderRecipeStats(p, panel);
   return renderGenericStats(p, panel);
 }
@@ -5549,6 +5570,41 @@ function renderGenericStats(p, panel) {
         ['待完成', recs.length - doneRecs],
         ['笔记数', noteCount]
       ])}
+    </div>
+  `;
+}
+
+// 技能学习统计：按标签统计技能数，不显示环形图
+function renderSkillStats(p, panel) {
+  const notes = DB.notes.filter(n => n.pid === currentPid);
+  const tagMap = {};
+  notes.forEach(n => {
+    const t = n.tag || '其他';
+    tagMap[t] = (tagMap[t] || 0) + 1;
+  });
+  const tags = Object.keys(tagMap).sort((a,b) => tagMap[b] - tagMap[a]);
+  const maxCount = Math.max(...Object.values(tagMap), 1);
+  const palette = ['#E74C3C','#F39C12','#27AE60','#3498DB','#9B59B6','#1ABC9C','#E67E22','#34495E','#D35400','#16A085'];
+  panel.innerHTML = `
+    <div class="chart-card">
+      <div class="chart-title">技能统计</div>
+      <div class="chart-desc">共 ${notes.length} 条技能心得 · ${tags.length} 个技能分类</div>
+      ${tags.length === 0 ? `<div style="text-align:center;color:var(--muted);padding:30px 0;font-size:13px;">暂无技能记录</div>` : `
+      <div style="margin-top:12px;display:flex;flex-direction:column;gap:14px;">
+        ${tags.map((t, i) => {
+          const c = palette[i % palette.length];
+          const cnt = tagMap[t];
+          return `<div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <span style="font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:50%;background:${c};"></span>${escapeHTML(t)}</span>
+              <span style="font-size:14px;font-weight:700;color:${c};">${cnt}</span>
+            </div>
+            <div style="height:8px;background:var(--bg-2);border-radius:4px;overflow:hidden;">
+              <div style="height:100%;width:${cnt/maxCount*100}%;background:${c};border-radius:4px;transition:width 0.4s;"></div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`}
     </div>
   `;
 }
@@ -6294,6 +6350,29 @@ function openTaskImageViewer(images, startIdx) {
   $('#viewerNext')?.addEventListener('click', () => {
     current = (current + 1) % images.length;
     update();
+  });
+}
+
+/* 笔记只读查看 */
+function openNoteViewer(id) {
+  const n = DB.notes.find(x => x.id === id);
+  if (!n) return;
+  openModal(`
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <span class="note-tag" style="background:var(--accent-soft);color:var(--accent-ink);">${escapeHTML(n.tag||'笔记')}</span>
+      <span style="font-size:12px;color:var(--muted);">${fmtTime(n.ts)}</span>
+    </div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:12px;line-height:1.4;">${escapeHTML(n.title||'无标题')}</div>
+    <div style="color:var(--ink-2);font-size:15px;line-height:1.8;white-space:pre-wrap;word-break:break-word;">${escapeHTML(n.content||'')}</div>
+    ${n.videoUrl ? `<div style="margin-top:14px;"><a href="${escapeHTML(n.videoUrl)}" target="_blank" style="color:var(--accent);font-size:13px;">🔗 视频链接</a></div>` : ''}
+    <div class="modal-actions" style="margin-top:20px;">
+      <button class="btn btn-ghost" onclick="closeModal()">关闭</button>
+      <button class="btn btn-primary" id="viewerEdit">编辑</button>
+    </div>
+  `);
+  $('#viewerEdit').addEventListener('click', () => {
+    closeModal();
+    setTimeout(() => openNoteModal(id), 50);
   });
 }
 
