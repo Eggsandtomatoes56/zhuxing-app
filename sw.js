@@ -1,12 +1,12 @@
 // 工作台 Service Worker - 离线缓存
-const CACHE = 'zhuxing-v14';
+const CACHE = 'zhuxing-v20';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
-  './icon-192.png',
-  './icon-512.png',
-  './icon-512-maskable.png'
+  './icon-192.jpg',
+  './icon-512.jpg',
+  './icon-512-maskable.jpg'
 ];
 
 // 安装：逐个缓存核心资源（任一失败不影响其它，避免原子性整体失败）
